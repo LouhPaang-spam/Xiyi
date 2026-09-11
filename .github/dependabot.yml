@@ -5,7 +5,32 @@
 
 version: 2
 updates:
-  - package-ecosystem: "Cargo" # See documentation for possible values
-    directory: "/" # Location of package manifests
+  # Rust Cargo 依赖配置
+  - package-ecosystem: "cargo"
+    # 【关键】指向你 Cargo.toml 所在的实际目录
+    directory: "/the-xiyi-language/Projects/xiyi-compiler"
     schedule:
-      interval: "weekly"
+      # 【推荐】将检查频率从每周改为每天，以便更快发现更新
+      interval: "daily"
+    # 允许同时打开的 PR 数量，默认是 5，适当提高可加快更新
+    open-pull-requests-limit: 10
+    # 为 PR 添加标签，方便识别和管理
+    labels:
+      - "dependencies"
+      - "rust"
+    # 【彻底】将相关更新分组，减少 PR 数量，方便批量审查
+    groups:
+      # 将所有补丁级别的更新归为一组
+      cargo-patch:
+        patterns:
+          - "*"
+        update-types:
+          - "patch"
+      # 将所有次要版本更新归为一组
+      cargo-minor:
+        patterns:
+          - "*"
+        update-types:
+          - "minor"
+    # 默认的 rebase 策略即可，Dependabot 会在有冲突时尝试自动变基
+    rebase-strategy: "auto"
