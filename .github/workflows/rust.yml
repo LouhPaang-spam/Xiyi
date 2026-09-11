@@ -1,27 +1,154 @@
 name: Rust
 
+# 注意：paths 里的是文件路径，不是 workflow 的 name。
+# 如果你实际文件名不是 rust.yml，这里必须同步改。
 on:
   push:
-    branches: [ "main" ]
+    branches: [main]
+    paths:
+      - "the-xiyi-language/Projects/xiyi-compiler/**"
+      - ".github/workflows/rust.yml"
   pull_request:
-    branches: [ "main" ]
+    branches: [main]
+    paths:
+      - "the-xiyi-language/Projects/xiyi-compiler/**"
+      - ".github/workflows/rust.yml"
 
 env:
   CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: 0
+  RUST_BACKTRACE: 1
+  RUSTFLAGS: "-D warnings"
+  WORKDIR: the-xiyi-language/Projects/xiyi-compiler
 
+# 【运行时语义，不是语法问题】
+# cancel-in-progress 只在非 main 分支为 true。
+# 原因：release-test 只在 main 跑，group 在 main 上是固定的
+# xiyi-compiler-refs/heads/main。若这里恒为 true，连续两次 merge
+# 会让后一次取消前一次还在跑的 release-test，main 上的 release
+# 验证永远可能被腰斩，而 PR 阶段又没验证过 release。
+# 非 main（含 PR）保持 true，连续 push 只保留最新一次，省资源。
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+
+permissions:
+  contents: read
+
+# 关于 action 版本：
+# 本文件所有 uses 一律使用浮动 tag，不 pin SHA，避免只钉一个造成的“半成品”。
+# 若要 pin，请用 `pin-github-action` / `ratchet` 等工具一次性把全部 uses 钉到当前 SHA，
+# 不要手抄旧 SHA。旧 SHA 比浮动 tag 更差：既拿不到 bugfix，也可能错过 runner 运行时迁移。
 jobs:
-  build:
+  fmt:
+    name: Rustfmt
     runs-on: ubuntu-latest
-
     defaults:
       run:
-        working-directory: the-xiyi-language/Projects/xiyi-compiler
-
+        working-directory: ${{ env.WORKDIR }}
     steps:
       - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt
+      - run: cargo fmt --all -- --check
 
-      - name: Build
-        run: cargo build --verbose
+  clippy:
+    name: Clippy
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: ${{ env.WORKDIR }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: ${{ env.WORKDIR }}
+      - run: cargo clippy --locked --all-targets --all-features -- -D warnings
 
-      - name: Run tests
-        run: cargo test --verbose
+  test:
+    name: Test
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    defaults:
+      run:
+        working-directory: ${{ env.WORKDIR }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: ${{ env.WORKDIR }}
+      - run: cargo test --locked
+
+  msrv:
+    name: MSRV
+    runs-on: ubuntu-latest
+    # 【必须与 Cargo.toml 的 package.rust-version 保持同步】
+    # Cargo.toml 里写的是 rust-version = "1.97"，
+    # 这里就是 1.97.0。改 Cargo.toml 时务必同步改这里。
+    #
+    # 用 @1.97.0 作为 action ref，而不是 @master + with.toolchain，
+    # 这样 action 代码与工具链版本都固定在同一处，和其他 job 的 @stable 风格一致。
+    #
+    # 清掉全局 RUSTFLAGS：MSRV 编译器的告警集与 stable 不同，
+    # 常出现“stable 绿、MSRV 红，原因是一个已经没人在意的 rustc 警告”。
+    env:
+      RUSTFLAGS: ""
+    defaults:
+      run:
+        working-directory: ${{ env.WORKDIR }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@1.97.0
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: ${{ env.WORKDIR }}
+      # README 声称 1.97 可用，所以这里跑 test 而不是 check。
+      # 若只想验证“能编过”，把 test 换成 check 可省时间。
+      - run: cargo test --locked
+
+  release-test:
+    name: Release Test (main only)
+    # 【不要把这个 job 设为 required check】
+    # 在 PR 上 github.ref 是 refs/pull/N/merge，条件为 false，job 永远 skipped。
+    # GitHub branch protection 等的是 success，不是 skipped；
+    # 一旦设为 required，PR 会永远合不进去。
+    # required 只勾：fmt / clippy / test / msrv / deny。
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: ${{ env.WORKDIR }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: ${{ env.WORKDIR }}
+      # 用 test 而不是 build：
+      # debug 与 release 真正的分叉是 debug_assertions、溢出检查、LTO/codegen-units。
+      # 只 build 只能抓 LTO/链接类问题，test 能覆盖前两类。
+      - run: cargo test --locked --release
+
+  deny:
+    name: Cargo Deny
+    runs-on: ubuntu-latest
+    # 前置条件（缺一不可，否则这个 job 会红）：
+    # 1. deny.toml 必须放在 ${{ env.WORKDIR }} 下，和 working-directory 一致，
+    #    不是仓库根目录。
+    # 2. deny.toml 至少启用 [advisories] 和 [licenses]；
+    #    [bans] / [sources] 即使空着也要显式写出，别靠 action 默认。
+    # 3. paths 里的 glob 已覆盖 WORKDIR 全目录，deny.toml 变更会触发本 workflow。
+    # 不需要 rust-cache，也不需要自己装 toolchain，这两点保持默认即可。
+    steps:
+      - uses: actions/checkout@v4
+      - uses: EmbarkStudios/cargo-deny-action@v2
+        with:
+          working-directory: ${{ env.WORKDIR }}
