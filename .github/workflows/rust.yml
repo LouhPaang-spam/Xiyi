@@ -95,10 +95,10 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 20
     # 【必须与 Cargo.toml 的 package.rust-version 保持同步】
-    # Cargo.toml 里写的是 rust-version = "1.97"，
-    # 这里就是 1.97.0。改 Cargo.toml 时务必同步改这里。
+    # Cargo.toml 里写的是 rust-version = "1.98.1"，
+    # 这里就是 1.98.1。改 Cargo.toml 时务必同步改这里。
     #
-    # 用 @1.97.0 作为 action ref，而不是 @master + with.toolchain，
+    # 用 @1.98.1 作为 action ref，而不是 @master + with.toolchain，
     # 这样 action 代码与工具链版本都固定在同一处，和其他 job 的 @stable 风格一致。
     #
     # 清掉全局 RUSTFLAGS：MSRV 编译器的告警集与 stable 不同，
@@ -110,11 +110,11 @@ jobs:
         working-directory: ${{ env.WORKDIR }}
     steps:
       - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@1.97.0
+      - uses: dtolnay/rust-toolchain@1.98.1
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: ${{ env.WORKDIR }}
-      # README 声称 1.97 可用，所以这里跑 test 而不是 check。
+      # README 声称 1.98.1 可用，所以这里跑 test 而不是 check。
       # 若只想验证“能编过”，把 test 换成 check 可省时间。
       - run: cargo test --locked
 
